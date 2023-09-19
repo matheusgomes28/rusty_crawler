@@ -1,17 +1,31 @@
-use anyhow::{Result, anyhow};
-use std::process;
+use anyhow::{Result, anyhow, bail};
+use clap::Parser;
+use url::Url;
+use std::{process, collections::{VecDeque, HashSet}};
 use html_parser::{Dom, Node, Element};
 
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct ProgramArgs {
+    /// Name of the person to greet
+    #[arg(short, long)]
+    starting_url: String,
+}
 
 /// This will turn relative urls into
 /// full urls.
 /// E.g. get_url("/services/", "https://google.com/") -> "https://google.com/service/"
-fn get_url(url: &str, root_url: &str) -> String {
-    if url.starts_with("https://") || url.starts_with("http://") {
-        return url.into();
+fn get_url(path: &str, root_url: Url) -> Result<Url> {
+    match Url::parse(&path) {
+        Ok(url) => Ok(url),
+        _ => {
+            match root_url.join(path) {
+                Ok(url) => Ok(url),
+                _ => bail!("could not join relative path")
+            }
+        }
     }
-
-    format!("{}/{}", root_url.strip_suffix('/').unwrap_or(root_url), url.strip_prefix('/').unwrap_or(url))
 }
 
 fn is_node(node: &Node) -> bool {
@@ -21,7 +35,7 @@ fn is_node(node: &Node) -> bool {
     }
 }
 
-fn crawl_element(elem: Element, root_url: &str) -> Result<Vec<String>> {
+fn crawl_element(elem: &Element, root_url: Url) -> Result<Vec<String>> {
 
     let mut links: Vec<String> = Vec::new();
 
@@ -29,21 +43,13 @@ fn crawl_element(elem: Element, root_url: &str) -> Result<Vec<String>> {
     if elem.name == "a" {
         let href_attrib = elem
             .attributes
-            .iter()
-            .filter(|(name, _)| name.as_str() == "href")
-            .last()
-            .ok_or_else(|| anyhow!("no href found in a"));
+            .get("href")
+            .ok_or_else(|| anyhow!("could not find href in link"))?
+            .as_ref()
+            .ok_or_else(|| anyhow!("href does not have a value"))?
+            .clone();
 
-
-        // Check if we have the "href"attribute
-        match href_attrib {
-            Ok((_key, Some(val))) => {
-                links.push(get_url(val, &root_url));
-            },
-            _ => {
-                log::error!("No link found for element {}", elem.name);
-            }
-        }
+        links.push(get_url(&href_attrib, root_url.clone())?.to_string());
     }
 
     for node in elem
@@ -54,7 +60,7 @@ fn crawl_element(elem: Element, root_url: &str) -> Result<Vec<String>> {
         match node {
             Node::Element(elem) => {
                 // add whatever links from this elem to our vector
-                let mut children_links = crawl_element(elem.clone(), root_url)?;
+                let mut children_links = crawl_element(elem, root_url.clone())?;
                 links.append(&mut children_links);
             },
             _ => {}
@@ -64,40 +70,81 @@ fn crawl_element(elem: Element, root_url: &str) -> Result<Vec<String>> {
     Ok(links)
 }
 
-async fn crawl_url(url: &str) -> Result<Vec<String>>
+async fn crawl_url(url: Url) -> Result<Vec<String>>
 {
     // Parsing html into a DOM obj
-    let html = reqwest::get(url)
+    let html = reqwest::get(url.clone())
         .await?
         .text()
         .await?;
     let dom = Dom::parse(&html)?;
 
+    // Return links
+    let mut res: Vec<String> = Vec::new();
+
     // Crawls all the nodes in the main html
     for child in dom.children {
         match child {
             Node::Element(elem) => {
+                let links = match crawl_element(&elem, url.clone()) {
+                    Ok(links) => links,
+                    Err(e) => {
+                        log::error!("Error: {}", e);
+                        Vec::new()
+                    }
+                };
 
-                for link in crawl_element(elem, url)? {
+                for link in links {
+                    res.push(link.clone());
                     log::info!("Link found in {}: {:?}", url, link);
                 }
             },
             _ => {}
         }
     }
-
     
-    // TODO : change this to the sum of links
-    let res: Vec<String> = Vec::new();
     Ok(res)
 }
 
-async fn try_main() -> Result<()> {
+async fn try_main(args: ProgramArgs) -> Result<()> {
 
-    let _ = crawl_url("https://google.com").await?;
+    let max_links = 1000;
 
-    log::info!("hello world!");
+    // Already visited links
+    let mut already_visited: HashSet<String> = HashSet::new();
 
+    // Another arg -> max number links
+    let mut link_queue: VecDeque<String> = VecDeque::with_capacity(max_links);
+    link_queue.push_back(args.starting_url);
+
+    // Crawler loop
+    'crawler: loop {
+        // also check that max links have been reached
+        if link_queue.is_empty() || (already_visited.len() > max_links) {
+            break 'crawler;
+        }
+
+        // current url to visit
+        let url_str = link_queue
+            .pop_back()
+            .ok_or_else(|| anyhow!("queue is empty"))?;
+
+        let url = Url::parse(&url_str)?;
+
+        let links = crawl_url(url)
+            .await?;
+
+        for link in links {
+            if !already_visited.contains(&link) {
+                link_queue.push_back(link)
+            }
+        }
+
+        // add visited link to set of already visited link
+        already_visited.insert(url_str);
+    }
+
+    println!("{:?}", already_visited);
     Ok(())
 }
 
@@ -105,7 +152,9 @@ async fn try_main() -> Result<()> {
 async fn main() {
     env_logger::init();
 
-    match try_main().await {
+    let args = ProgramArgs::parse();
+
+    match try_main(args).await {
         Ok(_) => {
             log::info!("Finished");
         },
