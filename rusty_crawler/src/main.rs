@@ -5,7 +5,9 @@ use reqwest::{StatusCode, Client};
 use tokio::sync::RwLock;
 use url::Url;
 use std::{process, collections::{VecDeque, HashSet}, sync::Arc, pin::Pin, time::Duration};
-use html_parser::{Dom, Node, Element};
+use html_parser::{Dom, Element, Node};
+
+const LINK_REQUEST_TIMEOUT_S: u64 = 2;
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -39,11 +41,16 @@ fn get_url(path: &str, root_url: Url) -> Result<Url> {
         .ok_or(anyhow!("could not join relative path"))
 }
 
-fn is_node(node: &Node) -> bool {
-    match node {
-        Node::Element(..) => true,
-        _ => false
-    }
+fn crawl_recursively(children: &[Node], root_url: Url) -> Result<Vec<String>> {
+    let elements = children
+        .iter()
+        .filter_map(|e| e.element());
+
+    let links =  elements
+        .filter_map(|e| crawl_element(e, root_url.clone()).ok());
+
+    let result: Vec<String> = links.flatten().collect();
+    Ok(result)
 }
 
 fn crawl_element(elem: &Element, root_url: Url) -> Result<Vec<String>> {
@@ -63,33 +70,16 @@ fn crawl_element(elem: &Element, root_url: Url) -> Result<Vec<String>> {
         links.push(get_url(&href_attrib, root_url.clone())?.to_string());
     }
 
-    for node in elem
-        .children
-        .iter()
-        .filter(|c| is_node(c)) {
-        
-        match node {
-            Node::Element(elem) => {
-                // add whatever links from this elem to our vector
-                let mut children_links = crawl_element(elem, root_url.clone())?;
-                links.append(&mut children_links);
-            },
-            _ => {}
-        }
-    }
-
-    Ok(links)
+    // Rescursive call -> crawl_element
+    let all_links = crawl_recursively(&elem.children, root_url);
+    Ok(links.extend(crawl_recursively(&elem.children, root_url)))
 }
 
 async fn find_links(url: Url, client: &Client) -> Result<Vec<String>>
 {
-    // Parsing html into a DOM obj
-    log::info!("Finding links inside {}", url.as_str());
-
-
     let response = client
-        .get(url.clone())
-        .timeout(Duration::from_millis(10000))
+    .get(url.clone())
+    .timeout(Duration::from_secs(LINK_REQUEST_TIMEOUT_S))
         .send()
         .await?;
 
@@ -102,31 +92,8 @@ async fn find_links(url: Url, client: &Client) -> Result<Vec<String>>
         .await?;
     let dom = Dom::parse(&html)?;
 
-    // Return links
-    let mut res: Vec<String> = Vec::new();
-
     // Crawls all the nodes in the main html
-    for child in dom.children {
-        match child {
-            Node::Element(elem) => {
-                let links = match crawl_element(&elem, url.clone()) {
-                    Ok(links) => links,
-                    Err(e) => {
-                        log::error!("Error: {}", e);
-                        Vec::new()
-                    }
-                };
-
-                for link in links {
-                    res.push(link.clone());
-                    log::info!("Link found in {}: {:?}", url, link);
-                }
-            },
-            _ => {}
-        }
-    }
-    
-    Ok(res)
+    crawl_recursively(&dom.children, url)
 }
 
 async fn crawl(crawler_state: CrawlerStateRef, worker_n: i32) -> Result<()> {
@@ -135,35 +102,36 @@ async fn crawl(crawler_state: CrawlerStateRef, worker_n: i32) -> Result<()> {
 
     // Crawler loop
     'crawler: loop {
+        let already_visited = crawler_state.already_visited.read().await;
+        if already_visited.len() > crawler_state.max_links {
+            break 'crawler;
+        }
+        drop(already_visited);
+
         // also check that max links have been reached
         let mut link_queue = crawler_state.link_queue.write().await;
-        let already_visited = crawler_state.already_visited.read().await;
+        let url_str = link_queue.pop_back().unwrap_or("".to_string());
+        drop(link_queue);
 
-        if link_queue.is_empty() {
+        if url_str.is_empty() {
             log::info!("Waiting for the next link from {}", worker_n);
             tokio::time::sleep(Duration::from_millis(500)).await;
             continue;
         }
 
-        // If max links are reached, exit the worker thread
-        if already_visited.len() > crawler_state.max_links {
-            break 'crawler;
-        }
-
         // current url to visit
-        log::info!("Acquiring the next link from {}", worker_n);
-        let url_str = link_queue
-            .pop_back()
-            .ok_or_else(|| anyhow!("queue is empty"))?; // SHould not exit the worker
-        drop(link_queue);
-        drop(already_visited);
-
         log::info!("!!!! finding links for {}", &url_str);
         let url = Url::parse(&url_str)?;
-        let links = find_links(url, &client)
-            .await?;
 
-        
+        // Log the errors
+        let links = match find_links(url, &client).await {
+            Ok(links) => links,
+            Err(e) => {
+                log::error!("Error: {}", e);
+                continue;
+            }
+        };
+       
         let mut link_queue = crawler_state.link_queue.write().await;
         let mut already_visited = crawler_state.already_visited.write().await;
         for link in links {
