@@ -79,7 +79,7 @@ async fn find_links(url: Url, client: &Client) -> Vec<String>
         .collect()
 }
 
-pub async fn crawl(crawler_state: CrawlerStateRef, worker_n: i32) -> Result<()> {
+pub async fn crawl(crawler_state: CrawlerStateRef, worker_n: u64) -> Result<()> {
     // one client per worker thread
     let client = Client::new();
 
@@ -97,19 +97,15 @@ pub async fn crawl(crawler_state: CrawlerStateRef, worker_n: i32) -> Result<()> 
         drop(link_queue);
 
         if url_str.is_empty() {
-            log::info!("Waiting for the next link from {}", worker_n);
             tokio::time::sleep(Duration::from_millis(500)).await;
             continue;
         }
 
         // current url to visit
-        log::info!("!!!! finding links for {}", &url_str);
         let url = Url::parse(&url_str)?;
-        log::info!("!!!!! parsed url {}", &url_str);
 
         // Log the errors
         let links = find_links(url, &client).await;
-        log::info!("!!!!! found links in {}: {:?}", &url_str, links);
         
        
         let mut link_queue = crawler_state.link_queue.write().await;
