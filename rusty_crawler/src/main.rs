@@ -1,8 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
-use futures::{stream::FuturesUnordered, Future, StreamExt};
-use tokio::sync::RwLock;
-use std::{process, sync::Arc, pin::Pin, time::Duration, collections::VecDeque};
+use tokio::{sync::RwLock, task::JoinSet};
+use std::{process, sync::Arc, time::Duration, collections::VecDeque};
 
 mod crawler;
 use crawler::CrawlerStateRef;
@@ -30,8 +29,6 @@ struct ProgramArgs {
     log_status: bool
 }
 
-
-
 async fn output_status(crawler_state: CrawlerStateRef) -> Result<()> {
     loop {
         let link_queue = crawler_state.link_queue.read().await;
@@ -58,17 +55,25 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
     let crawler_state = Arc::new(crawler_state);
 
     // The actual crawling goes here
-    let mut tasks = FuturesUnordered::<Pin<Box<dyn Future<Output = Result<()>>>>>::new();
+    let mut tasks = JoinSet::new();
 
-    for worker_id in 0..args.n_worker_threads {
-        tasks.push(Box::pin(crawl(crawler_state.clone(), worker_id)));
+    for _ in 0..args.n_worker_threads {
+        let crawler_state = crawler_state.clone();
+        let task = tokio::spawn(async move{
+            crawl(crawler_state.clone()).await
+        });
+
+        tasks.spawn(task);
     }
-    
+
     if args.log_status {
-        tasks.push(Box::pin(output_status(crawler_state.clone())));
+        let crawler_state = crawler_state.clone();
+        tasks.spawn(tokio::spawn(async move {
+            output_status(crawler_state.clone()).await
+        }));
     }
 
-    while let Some(result) = tasks.next().await {
+    while let Some(result) = tasks.join_next().await {
         match result {
             Err(e) => {
                 log::error!("Error: {:?}", e);

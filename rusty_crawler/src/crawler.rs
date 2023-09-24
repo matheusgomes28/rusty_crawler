@@ -79,7 +79,7 @@ async fn find_links(url: Url, client: &Client) -> Vec<String>
         .collect()
 }
 
-pub async fn crawl(crawler_state: CrawlerStateRef, worker_n: u64) -> Result<()> {
+pub async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
     // one client per worker thread
     let client = Client::new();
 
