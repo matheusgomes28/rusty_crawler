@@ -1,16 +1,42 @@
 use anyhow::{Result, anyhow, bail};
 use reqwest::{Client, StatusCode};
-use scraper::Selector;
-use url::Url;
+use scraper::{Selector, Html};
 use std::{collections::{VecDeque, HashSet}, sync::Arc, time::Duration};
-
 use tokio::sync::RwLock;
+use url::Url;
+
+use crate::common::Image;
 
 const LINK_REQUEST_TIMEOUT_S: u64 = 2;
+
+
+/// Enum to represent data to scrape from
+/// each link
+pub enum ScrapeOption {
+    /// Find any image link with the given
+    /// extensions. E.g. `Image("jpg")`
+    Images,
+    Titles, // TODO Add support for page titles
+}
+
+/*
+pub struct PageInfo {
+    links: Vec<String>,
+    images: Vec<Image>,
+    titles: Vec<Title>,
+}
+*/
+
+pub struct ScrapeOutput {
+    pub links: Vec<String>,
+    pub images: Vec<Image>,
+    pub titles: Vec<String>,
+}
 
 pub struct CrawlerState {
     pub link_queue: RwLock<VecDeque<String>>,
     pub already_visited: RwLock<HashSet<String>>,
+    pub images: RwLock<Vec<Image>>,
     pub max_links: usize,
 }
 
@@ -30,10 +56,55 @@ fn get_url(path: &str, root_url: Url) -> Result<Url> {
         .ok_or(anyhow!("could not join relative path"))
 }
 
-/// Given a `url` and a `client`, it will return the
-/// parsed HTML in a DOM structure. It may return
-/// an error if the request fails.
-async fn get_all_links(url: Url, client: &Client) -> Result<Vec<String>> {
+fn get_images(html_dom: &Html, root_url: &Url) -> Vec<Image> {
+    let img_selector = Selector::parse("img[src]").unwrap();
+
+    let image_links = html_dom
+        .select(&img_selector)
+        .filter(|e| e.value().attr("src").is_some())
+        .map(|e| (e.value().attr("src").unwrap(), e.value().attr("alt").unwrap_or("")))
+        .map(|(link, alt)| Image{link: link.to_string(), alt: alt.to_string()});
+
+
+    let mut result: Vec<Image> = Default::default();
+    for image in image_links {
+
+        // TODO remove the clone by taking a reference
+        if let Ok(absolute_url) = get_url(&image.link, root_url.clone()) {
+            result.push(Image {
+                link: absolute_url.to_string(),
+                ..image
+            });
+            continue;
+        }
+
+        log::error!("failed to join url"); // TODO : better image
+    }
+    
+    result
+}
+
+/// This function will scrape all the titles from
+/// the given page's DOM -> title tags, h1, and h2 tags
+fn get_titles(html_dom: &Html) -> Vec<String> {
+    let mut titles: Vec<String> = Default::default();
+
+    for tag in ["h1", "h2", "title"] {
+        let title_selector = Selector::parse(tag).unwrap();
+
+        titles.extend(html_dom
+            .select(&title_selector)
+            .map(|e| e.text().collect::<String>()));
+    }
+
+    titles
+}
+
+/// Given a `url` and a `client`, it will parse the
+/// HTML in a DOM structure, and scrape all the information
+/// requested. It will find links by default.
+/// It may return an error if the request fails.
+async fn scrape_page_helper(url: Url, client: &Client, options: &[ScrapeOption]) -> Result<ScrapeOutput> {
     let response = client
         .get(url.clone())
         .timeout(Duration::from_secs(LINK_REQUEST_TIMEOUT_S))
@@ -48,77 +119,58 @@ async fn get_all_links(url: Url, client: &Client) -> Result<Vec<String>> {
         .text()
         .await?;
 
+    let html_dom = scraper::Html::parse_document(&html);
     
     let link_selector = Selector::parse("a").unwrap();
-    Ok(scraper::Html::parse_document(&html)
+    let links: Vec<String> = html_dom
         .select(&link_selector)
         .filter_map(|e| e.value().attr("href"))
         .map(|href| href.to_string())
-        .collect())
+        .collect();
+
+    // Now also want to get the scrape data
+    let mut images: Vec<Image> = Vec::new();
+    let mut titles: Vec<String> = Vec::new();
+    for option in options {
+        match option {
+            ScrapeOption::Images => {
+                images = get_images(&html_dom, &url);
+            },
+            ScrapeOption::Titles => {
+                titles = get_titles(&html_dom);
+            }
+        }
+    }
+
+    Ok(ScrapeOutput { links, images, titles })
 }
 
 /// Given a `url`, and a `client`, it will crawl
 /// the HTML in `url` and find all the links in the
 /// page, returning them as a vector of strings
-async fn find_links(url: Url, client: &Client) -> Vec<String>
+pub async fn scrape_page(url: Url, client: &Client, options: &[ScrapeOption]) -> ScrapeOutput
 {
     // This will get all the "href" tags in all the anchors
-    let links = match get_all_links(url.clone(), &client).await {
-        Ok(links) => links,
+    // TODO : Pass in the options
+    let mut scrape_output = match scrape_page_helper(url.clone(), &client, options).await {
+        Ok(output) => output,
         Err(e) => {
             log::error!("Could not find links: {}", e);
-            Vec::new()
+            ScrapeOutput{
+                images: Default::default(),
+                links: Default::default(),
+                titles: Default::default(),
+            }
         }
     };
 
     // Turn all links into absolute links
-    links
-        .iter()
-        .filter_map(|l| get_url(l, url.clone()).ok())
-        .map(|url| url.to_string())
-        .collect()
-}
-
-pub async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
-    // one client per worker thread
-    let client = Client::new();
-
-    // Crawler loop
-    'crawler: loop {
-        let already_visited = crawler_state.already_visited.read().await;
-        if already_visited.len() > crawler_state.max_links {
-            break 'crawler;
-        }
-        drop(already_visited);
-
-        // also check that max links have been reached
-        let mut link_queue = crawler_state.link_queue.write().await;
-        let url_str = link_queue.pop_back().unwrap_or("".to_string());
-        drop(link_queue);
-
-        if url_str.is_empty() {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            continue;
-        }
-
-        // current url to visit
-        let url = Url::parse(&url_str)?;
-
-        // Log the errors
-        let links = find_links(url, &client).await;
-        
-       
-        let mut link_queue = crawler_state.link_queue.write().await;
-        let mut already_visited = crawler_state.already_visited.write().await;
-        for link in links {
-            if !already_visited.contains(&link) {
-                link_queue.push_back(link)
-            }
-        }
-
-        // add visited link to set of already visited link
-        already_visited.insert(url_str);
-    }
-
-    Ok(())
+    scrape_output.links = scrape_output
+            .links
+            .iter()
+            .filter_map(|l| get_url(l, url.clone()).ok())
+            .map(|url| url.to_string())
+            .collect();
+    
+    scrape_output
 }
