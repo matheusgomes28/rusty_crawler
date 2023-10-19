@@ -1,11 +1,12 @@
 use anyhow::{Result, anyhow, bail};
 use reqwest::{Client, StatusCode};
 use scraper::{Selector, Html};
-use std::{collections::{VecDeque, HashSet}, sync::Arc, time::Duration};
+use std::{collections::{VecDeque, HashMap}, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use url::Url;
 
-use crate::common::Image;
+use crate::model::link::{Link, LinkId};
+use crate::model::link::Image;
 
 const LINK_REQUEST_TIMEOUT_S: u64 = 2;
 
@@ -35,8 +36,8 @@ pub struct ScrapeOutput {
 
 pub struct CrawlerState {
     pub link_queue: RwLock<VecDeque<String>>,
-    pub already_visited: RwLock<HashSet<String>>,
-    pub images: RwLock<Vec<Image>>,
+    pub visited_links: RwLock<HashMap<LinkId, Link>>,
+    pub link_ids: RwLock<HashMap<String, LinkId>>,
     pub max_links: usize,
 }
 
@@ -56,6 +57,7 @@ fn get_url(path: &str, root_url: Url) -> Result<Url> {
         .ok_or(anyhow!("could not join relative path"))
 }
 
+// TODO : we're gonna need to know the ID of the URL
 fn get_images(html_dom: &Html, root_url: &Url) -> Vec<Image> {
     let img_selector = Selector::parse("img[src]").unwrap();
 
@@ -120,7 +122,7 @@ async fn scrape_page_helper(url: Url, client: &Client, options: &[ScrapeOption])
         .await?;
 
     let html_dom = scraper::Html::parse_document(&html);
-    
+
     let link_selector = Selector::parse("a").unwrap();
     let links: Vec<String> = html_dom
         .select(&link_selector)

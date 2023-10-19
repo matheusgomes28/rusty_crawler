@@ -7,7 +7,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'rusty_crawler'",
+            "name": "RustyCrawler",
             "cargo": {
                 "args": [
                     "build",
@@ -21,7 +21,12 @@
             },
             "args": [
                 "--starting-url",
-                "https://policies.google.com/terms"
+                "https://matgomes.com",
+                "--max-links",
+                "200",
+                "--max-images",
+                "300",
+                "--log-status"
             ],
             "env": {
                 "RUST_LOG": "info"

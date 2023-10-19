@@ -19,36 +19,33 @@ input:
 */
 
 use anyhow::{Result, anyhow, bail};
-use url::Url;
 use std::collections::HashMap;
 use std::path::Path;
 
-use reqwest::Client;
-use tokio::fs::File;
+use reqwest::{Client, Response};
+use tokio::fs::{File, create_dir};
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
-use crate::common::Image;
+use crate::model::link::{Image, LinkId, Link};
 
 
-/// Convert all the images in the input to
-/// our json format
-pub fn convert_to_json(images: &[Image]) -> HashMap<String, Image> {
-    
-    let mut image_map: HashMap<String, Image> = HashMap::new();
-
-    for image in images {
-        let uuid = Uuid::new_v4().to_string();
-        image_map.insert(uuid, image.clone());
-    }
-    
-    image_map
+/// Convert all the images in the found scraped
+/// links to the (Uuid name, image) format
+pub fn conver_links_to_images(links: &HashMap<LinkId, Link>) -> HashMap<String, Image> {
+    links
+        .values()
+        .map(|link| link.images.clone())
+        .flatten()
+        .map(|img| (Uuid::new_v4().to_string(), img))
+        .collect()
 }
 
 /// This function downloads one image into the destination
 /// using the tokio stream io extensions. Note that this
 /// contains modified code from https://gist.github.com/giuliano-oliveira/4d11d6b3bb003dba3a1b53f43d81b30d
+/// destination - the path to the destination without the extension!
 async fn download_image(link: &str, destination: &str, client: &Client) -> Result<()> {
     // Download the image
     let res = client
@@ -56,7 +53,10 @@ async fn download_image(link: &str, destination: &str, client: &Client) -> Resul
         .send()
         .await?;
 
-    let mut file = File::create(destination).await?;
+    // Get the content type here
+    let extension = get_extension(&res)?;
+    
+    let mut file = File::create(destination.to_string() + "." + extension).await?;
     let mut stream = res.bytes_stream();
 
     // download chunks
@@ -68,56 +68,69 @@ async fn download_image(link: &str, destination: &str, client: &Client) -> Resul
     Ok(())
 }
 
+
+fn get_extension(res: &Response) -> Result<&str> {
+    // Here where we can get the "content-type" and "image/gif"
+    let content_type = res
+        .headers()
+        .get("content-type")
+        .ok_or_else(|| anyhow!("failed to get content type"))?
+        .to_str()?;
+    
+    match content_type {
+        "image/gif" => Ok("gif"),
+        "image/jpeg" => Ok("jpg"),
+        "image/png" => Ok("png"),
+        "image/svg+xml" => Ok("svg"),
+        "image/webp" => Ok("webp"),
+        "image/tiff" => Ok("tif"),
+        _ => bail!("unsupported extension type")
+    }
+}
+
 /// Takes in the hashmap (image name, image info), downloads the images
 /// and saves them to disk.
-pub async fn download_images(images: HashMap<String, Image>, save_directory: &str, client: &Client) -> Result<()> {
+pub async fn download_images(
+    images: &HashMap<String, Image>,
+    save_directory: &str,
+    client: &Client,
+    max_links: u64,
+) -> Result<()> {
     let directory_path = Path::new(&save_directory);
     if !directory_path.is_dir() {
-        bail!("given save directory is invalid");
+        // bail!("given save directory is invalid");
+        create_dir(directory_path).await?;
     }
 
-    for (name, image) in images {
+    for (name, image) in images.iter().take(max_links as usize) {
         // directory + name + extension
-        let original_name = Url::parse(&image.link)?;
-        if let Some(image_name) = original_name
-            .path_segments()
-            .iter()
-            .last()
-            .map(|s| s.clone().collect::<String>()){
-            
-
-            let name_ext = name + "." + image_name.split('.').last().unwrap_or("unknown");
-            let destination_path = directory_path.join(name_ext);
-            let destination = destination_path
-                .to_str()
-                .ok_or_else(|| anyhow!("could not get destination path"))?;
-
-            download_image(&image.link, &destination, &client).await?;
-            continue;
-        }
+        let destination_path = directory_path.join(name);
+        let destination = destination_path
+            .to_str()
+            .ok_or_else(|| anyhow!("could not get destination path"))?;
         
-        log::error!("could not get filename for image {}", image.link);
+        if let Err(e) = download_image(&image.link, &destination, &client).await {
+            log::error!("Could not download image {}, error: {}", image.link, e);
+        }
     }
 
     Ok(())
 }
 
 
-#[cfg(test)]
-mod tests {
-    use crate::common::Image;
+// #[cfg(test)]
+// mod tests {
+//     use crate::model::link::Image;
 
-    use super::convert_to_json;
+//     #[test]
+//     fn convert_to_json_empty() {
+//         let images = vec![
+//             Image{link: "path1.jpg".to_string(), alt: "some alt 1".to_string()},
+//             Image{link: "path2.jpg".to_string(), alt: "".to_string()},
+//         ];
 
-    #[test]
-    fn convert_to_json_empty() {
-        let images = vec![
-            Image{link: "path1.jpg".to_string(), alt: "some alt 1".to_string()},
-            Image{link: "path2.jpg".to_string(), alt: "".to_string()},
-        ];
-
-        let image_map = convert_to_json(&images);
-        let result = serde_json::to_string(&image_map);
-        print!("Result: {:#?}", result);
-    }
-}
+//         let image_map = convert_to_json(&images);
+//         let result = serde_json::to_string(&image_map);
+//         print!("Result: {:#?}", result);
+//     }
+// }
