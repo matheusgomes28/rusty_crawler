@@ -28,7 +28,7 @@ use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
-use crate::model::link::{Image, LinkId, Link};
+use crate::model::{Image, LinkId, Link};
 
 
 /// Convert all the images in the found scraped

@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Parser;
-use model::link::LinkId;
 use reqwest::Client;
 use tokio::{sync::RwLock, task::JoinSet, fs};
 use url::Url;
@@ -14,7 +13,7 @@ use crawler::{CrawlerStateRef, scrape_page, ScrapeOption};
 use crate::{
     crawler::CrawlerState,
     image_utils::{download_images, conver_links_to_images},
-    model::link::Link
+    model::{Link, LinkId}
 };
 
 /// Simple program to greet a person

@@ -5,8 +5,8 @@ use std::{collections::{VecDeque, HashMap}, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use url::Url;
 
-use crate::model::link::{Link, LinkId};
-use crate::model::link::Image;
+use crate::model::{Link, LinkId};
+use crate::model::Image;
 
 const LINK_REQUEST_TIMEOUT_S: u64 = 2;
 

@@ -1,21 +1,13 @@
+use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde::Serialize;
-
+use crate::model::image::Image;
 
 /// Counter to increment our current created link id
 static LINK_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Type for the Link ID
 pub type LinkId = u64;
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Image {
-    /// the link for this image
-    pub link: String,
-    /// the alternative text found within the image
-    pub alt: String,
-}
 
 #[derive(Debug, Serialize)]
 pub struct Link {
