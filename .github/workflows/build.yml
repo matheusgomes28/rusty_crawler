@@ -1,8 +1,6 @@
 name: Build
 
-on:
-  workflow_run:
-    workflows: ["Fail Fast"]
+on: [workflow_call]
 
 env:
   CARGO_TERM_COLOR: always
