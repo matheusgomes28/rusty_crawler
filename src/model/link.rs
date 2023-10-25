@@ -22,13 +22,17 @@ pub struct Link {
     /// list of images found on the webpage
     pub images: Vec<Image>,
     /// list of titles found on this webpage
-    pub titles: Vec<String>
+    pub titles: Vec<String>,
 }
 
-
 impl Link {
-    pub fn new(url: String, children: Vec<LinkId>, parents: Vec<LinkId>, images: Vec<Image>, titles: Vec<String>) -> Link {
-
+    pub fn new(
+        url: String,
+        children: Vec<LinkId>,
+        parents: Vec<LinkId>,
+        images: Vec<Image>,
+        titles: Vec<String>,
+    ) -> Link {
         let id = LINK_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         Link {
             url,
@@ -36,7 +40,7 @@ impl Link {
             children,
             parents,
             images,
-            titles
+            titles,
         }
     }
 }

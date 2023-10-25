@@ -1,6 +1,5 @@
 use serde::Serialize;
 
-
 #[derive(Clone, Debug, Serialize)]
 pub struct Image {
     /// the link for this image

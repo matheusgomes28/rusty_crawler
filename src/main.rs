@@ -1,19 +1,24 @@
 use anyhow::Result;
 use clap::Parser;
 use reqwest::Client;
-use tokio::{sync::RwLock, task::JoinSet, fs};
+use std::{
+    collections::{HashMap, VecDeque},
+    process,
+    sync::Arc,
+    time::Duration,
+};
+use tokio::{fs, sync::RwLock, task::JoinSet};
 use url::Url;
-use std::{process, sync::Arc, time::Duration, collections::{VecDeque, HashMap}};
 
 mod crawler;
 mod image_utils;
 mod model;
-use crawler::{CrawlerStateRef, scrape_page, ScrapeOption};
+use crawler::{scrape_page, CrawlerStateRef, ScrapeOption};
 
 use crate::{
     crawler::CrawlerState,
-    image_utils::{download_images, conver_links_to_images},
-    model::{Link, LinkId}
+    image_utils::{conver_links_to_images, download_images},
+    model::{Link, LinkId},
 };
 
 /// Simple program to greet a person
@@ -46,7 +51,7 @@ struct ProgramArgs {
 
     /// The file to save the link information to
     #[arg(long, default_value_t = String::from("links.json"))]
-    links_json: String
+    links_json: String,
 }
 
 async fn output_status(crawler_state: CrawlerStateRef) -> Result<()> {
@@ -130,15 +135,15 @@ async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
             Default::default(),
         );
         drop(link_ids);
-        
-       
-        let mut link_queue: tokio::sync::RwLockWriteGuard<'_, VecDeque<String>> = crawler_state.link_queue.write().await;
+
+        let mut link_queue: tokio::sync::RwLockWriteGuard<'_, VecDeque<String>> =
+            crawler_state.link_queue.write().await;
         let mut visited_links = crawler_state.visited_links.write().await;
         let mut link_ids = crawler_state.link_ids.write().await;
         for link in scrape_output.links {
             // TODO : check if we already have this link in the map
             //        if not, add to queue
-            if let None = link_ids.get(&link){
+            if let None = link_ids.get(&link) {
                 link_queue.push_back(link)
             }
         }
@@ -147,23 +152,21 @@ async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
         // TODO : add the value (created link)
         let link_id = link.id;
         visited_links.insert(link_id, link);
-        link_ids.insert(url_str,link_id);
+        link_ids.insert(url_str, link_id);
     }
 
     Ok(())
 }
 
-async fn serialize_links(links: &HashMap<LinkId, Link>, destination: &str) -> Result<()>
-{
+async fn serialize_links(links: &HashMap<LinkId, Link>, destination: &str) -> Result<()> {
     let json = serde_json::to_string(links)?;
     fs::write(destination, json).await?;
     Ok(())
 }
 
 async fn try_main(args: ProgramArgs) -> Result<()> {
-
     // call crawl(...)
-    let crawler_state = CrawlerState{
+    let crawler_state = CrawlerState {
         link_queue: RwLock::new(VecDeque::from([args.starting_url])),
         link_ids: RwLock::new(Default::default()),
         visited_links: RwLock::new(Default::default()),
@@ -176,9 +179,7 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
 
     for _ in 0..args.n_worker_threads {
         let crawler_state = crawler_state.clone();
-        let task = tokio::spawn(async move{
-            crawl(crawler_state.clone()).await
-        });
+        let task = tokio::spawn(async move { crawl(crawler_state.clone()).await });
 
         tasks.spawn(task);
     }
@@ -194,8 +195,8 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
         match result {
             Err(e) => {
                 log::error!("Error: {:?}", e);
-            },
-            _ => ()
+            }
+            _ => (),
         }
     }
 
@@ -205,8 +206,14 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
     let client = reqwest::Client::new();
     let visited_links = crawler_state.visited_links.read().await;
     let image_metadata = conver_links_to_images(&visited_links);
-    download_images(&image_metadata, &args.img_save_dir, &client, args.max_images).await?;
-    
+    download_images(
+        &image_metadata,
+        &args.img_save_dir,
+        &client,
+        args.max_images,
+    )
+    .await?;
+
     // Save this to image dir
     let image_database = serde_json::to_string(&image_metadata)?;
     fs::write(args.img_save_dir + "databse.json", image_database).await?;
@@ -224,7 +231,7 @@ async fn main() {
     match try_main(args).await {
         Ok(_) => {
             log::info!("Finished");
-        },
+        }
         Err(e) => {
             log::error!("Error: {:?}", e);
             process::exit(-1);

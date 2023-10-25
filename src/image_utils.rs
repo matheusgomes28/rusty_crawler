@@ -18,18 +18,17 @@ input:
 }
 */
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
 use reqwest::{Client, Response};
-use tokio::fs::{File, create_dir};
+use tokio::fs::{create_dir, File};
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
-use crate::model::{Image, LinkId, Link};
-
+use crate::model::{Image, Link, LinkId};
 
 /// Convert all the images in the found scraped
 /// links to the (Uuid name, image) format
@@ -48,14 +47,11 @@ pub fn conver_links_to_images(links: &HashMap<LinkId, Link>) -> HashMap<String, 
 /// destination - the path to the destination without the extension!
 async fn download_image(link: &str, destination: &str, client: &Client) -> Result<()> {
     // Download the image
-    let res = client
-        .get(link)
-        .send()
-        .await?;
+    let res = client.get(link).send().await?;
 
     // Get the content type here
     let extension = get_extension(&res)?;
-    
+
     let mut file = File::create(destination.to_string() + "." + extension).await?;
     let mut stream = res.bytes_stream();
 
@@ -68,7 +64,6 @@ async fn download_image(link: &str, destination: &str, client: &Client) -> Resul
     Ok(())
 }
 
-
 fn get_extension(res: &Response) -> Result<&str> {
     // Here where we can get the "content-type" and "image/gif"
     let content_type = res
@@ -76,7 +71,7 @@ fn get_extension(res: &Response) -> Result<&str> {
         .get("content-type")
         .ok_or_else(|| anyhow!("failed to get content type"))?
         .to_str()?;
-    
+
     match content_type {
         "image/gif" => Ok("gif"),
         "image/jpeg" => Ok("jpg"),
@@ -84,7 +79,7 @@ fn get_extension(res: &Response) -> Result<&str> {
         "image/svg+xml" => Ok("svg"),
         "image/webp" => Ok("webp"),
         "image/tiff" => Ok("tif"),
-        _ => bail!("unsupported extension type")
+        _ => bail!("unsupported extension type"),
     }
 }
 
@@ -108,7 +103,7 @@ pub async fn download_images(
         let destination = destination_path
             .to_str()
             .ok_or_else(|| anyhow!("could not get destination path"))?;
-        
+
         if let Err(e) = download_image(&image.link, &destination, &client).await {
             log::error!("Could not download image {}, error: {}", image.link, e);
         }
@@ -116,7 +111,6 @@ pub async fn download_images(
 
     Ok(())
 }
-
 
 // #[cfg(test)]
 // mod tests {
