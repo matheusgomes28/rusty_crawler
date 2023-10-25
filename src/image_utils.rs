@@ -111,19 +111,12 @@ pub async fn download_images(
     Ok(())
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use crate::model::link::Image;
+#[cfg(test)]
+mod tests {
+    // use crate::model::Image;
 
-//     #[test]
-//     fn convert_to_json_empty() {
-//         let images = vec![
-//             Image{link: "path1.jpg".to_string(), alt: "some alt 1".to_string()},
-//             Image{link: "path2.jpg".to_string(), alt: "".to_string()},
-//         ];
-
-//         let image_map = convert_to_json(&images);
-//         let result = serde_json::to_string(&image_map);
-//         print!("Result: {:#?}", result);
-//     }
-// }
+    #[test]
+    fn a_unit_test() {
+        assert!(true);
+    }
+}
