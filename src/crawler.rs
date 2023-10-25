@@ -50,12 +50,12 @@ pub type CrawlerStateRef = Arc<CrawlerState>;
 /// full urls.
 /// E.g. get_url("/services/", "https://google.com/") -> "https://google.com/service/"
 fn get_url(path: &str, root_url: Url) -> Result<Url> {
-    if let Ok(url) = Url::parse(&path) {
+    if let Ok(url) = Url::parse(path) {
         return Ok(url);
     }
 
     root_url
-        .join(&path)
+        .join(path)
         .ok()
         .ok_or(anyhow!("could not join relative path"))
 }
@@ -170,7 +170,7 @@ async fn scrape_page_helper(
 pub async fn scrape_page(url: Url, client: &Client, options: &[ScrapeOption]) -> ScrapeOutput {
     // This will get all the "href" tags in all the anchors
     // TODO : Pass in the options
-    let mut scrape_output = match scrape_page_helper(url.clone(), &client, options).await {
+    let mut scrape_output = match scrape_page_helper(url.clone(), client, options).await {
         Ok(output) => output,
         Err(e) => {
             log::error!("Could not find links: {}", e);

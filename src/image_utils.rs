@@ -35,8 +35,7 @@ use crate::model::{Image, Link, LinkId};
 pub fn conver_links_to_images(links: &HashMap<LinkId, Link>) -> HashMap<String, Image> {
     links
         .values()
-        .map(|link| link.images.clone())
-        .flatten()
+        .flat_map(|link| link.images.clone())
         .map(|img| (Uuid::new_v4().to_string(), img))
         .collect()
 }
@@ -104,7 +103,7 @@ pub async fn download_images(
             .to_str()
             .ok_or_else(|| anyhow!("could not get destination path"))?;
 
-        if let Err(e) = download_image(&image.link, &destination, &client).await {
+        if let Err(e) = download_image(&image.link, destination, client).await {
             log::error!("Could not download image {}, error: {}", image.link, e);
         }
     }

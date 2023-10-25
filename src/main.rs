@@ -143,7 +143,7 @@ async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
         for link in scrape_output.links {
             // TODO : check if we already have this link in the map
             //        if not, add to queue
-            if let None = link_ids.get(&link) {
+            if link_ids.get(&link).is_none() {
                 link_queue.push_back(link)
             }
         }
@@ -192,11 +192,8 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
     }
 
     while let Some(result) = tasks.join_next().await {
-        match result {
-            Err(e) => {
-                log::error!("Error: {:?}", e);
-            }
-            _ => (),
+        if let Err(e) = result {
+            log::error!("Error: {:?}", e);
         }
     }
 
