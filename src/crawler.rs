@@ -1,16 +1,12 @@
 use anyhow::{anyhow, bail, Result};
 use reqwest::{Client, StatusCode};
 use scraper::{Html, Selector};
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use url::Url;
 
 use crate::model::Image;
-use crate::model::{Link, LinkId};
+use crate::model::LinkGraph;
 
 const LINK_REQUEST_TIMEOUT_S: u64 = 2;
 
@@ -39,8 +35,7 @@ pub struct ScrapeOutput {
 
 pub struct CrawlerState {
     pub link_queue: RwLock<VecDeque<String>>,
-    pub visited_links: RwLock<HashMap<LinkId, Link>>,
-    pub link_ids: RwLock<HashMap<String, LinkId>>,
+    pub link_graph: RwLock<LinkGraph>,
     pub max_links: usize,
 }
 

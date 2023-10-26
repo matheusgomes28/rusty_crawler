@@ -28,14 +28,14 @@ use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
-use crate::model::{Image, Link, LinkId};
+use crate::model::{Image, LinkGraph};
 
 /// Convert all the images in the found scraped
 /// links to the (Uuid name, image) format
-pub fn conver_links_to_images(links: &HashMap<LinkId, Link>) -> HashMap<String, Image> {
+pub fn conver_links_to_images(links: &LinkGraph) -> HashMap<String, Image> {
     links
-        .values()
-        .flat_map(|link| link.images.clone())
+        .into_iter()
+        .flat_map(|(_, link)| link.images.clone())
         .map(|img| (Uuid::new_v4().to_string(), img))
         .collect()
 }
@@ -111,12 +111,12 @@ pub async fn download_images(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    // use crate::model::Image;
+// #[cfg(test)]
+// mod tests {
+//     // use crate::model::Image;
 
-    #[test]
-    fn a_unit_test() {
-        assert!(true);
-    }
-}
+//     #[test]
+//     fn a_unit_test() {
+//         assert!(true);
+//     }
+// }

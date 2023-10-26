@@ -1,58 +1,99 @@
+use anyhow::{anyhow, Result};
+use serde::Serialize;
 use std::collections::HashMap;
 
-use serde::ser::{SerializeSeq, Serializer};
+use super::{Image, Link, LinkId};
 
-use super::{LinkId, Link};
-
-#[derive(Debug)]
-struct LinkGraph {
-    links: HashMap<LinkId, Link>,   
+#[derive(Default, Debug, Serialize)]
+pub struct LinkGraph {
+    links: HashMap<LinkId, Link>,
     link_ids: HashMap<String, LinkId>,
 }
 
 impl LinkGraph {
-
     // Update a link
-    fn update(url: &str, from: &str, children: &[&str]) -> Result<()> {
-        
-        // Case 1: If we already have the link here,
-        //         we simply need to add the children and
-        //         the parent
-        
-        // Parent has ID already? Then add parent to link
-        // Parent does not have ID? Ignore the parent
+    pub fn update(
+        &mut self,
+        url: &str,
+        parent: &str,
+        children: &[String],
+        images: &[Image],
+        titles: &[String],
+    ) -> Result<()> {
+        let maybe_parent_id = self.link_ids.get(parent).cloned();
 
-        // for each children:
-            // Child has ID already? Then add child to Link
-            // Child does not have ID? Then ignore child.
+        // for each child, add their id (if it exists) to this
+        // links children
+        let valid_children: Vec<LinkId> = children
+            .iter()
+            .filter_map(|c| self.link_ids.get(c).cloned())
+            .collect();
 
+        // get the existing link or create a new one
+        let link = self.force_get_link_id(url)?;
 
+        if let Some(parent_id) = maybe_parent_id {
+            link.parents.push(parent_id);
+        }
 
-        // Case 2: If we don't have the link, create a new
-        //         `Link` object with the children and the
-        //         parent
+        link.children.extend(valid_children);
 
-        // Parent has ID already? Then add parent to link
-        // Parent does not have ID? Ignore the parent
+        // TODO : reduce all these cloned (maybe use moved values)
+        link.images.extend(images.iter().cloned());
+        link.titles.extend(titles.iter().cloned());
 
-        // for each children:
-            // Child has ID already? Then add child to Link
-            // Child does not have ID? Then ignore child.
-        
+        // Potentially there's a chance that we might visit the same
+        // link through different parents, meaning that we will get
+        // duplicated children, images, titles -> need a way to
+        // unduplicate all of this (I.e. use sets)
+
         Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        self.links.len()
+    }
+
+    pub fn link_visited(&self, url: &str) -> bool {
+        self.link_ids.get(url).is_some()
+    }
+
+    /// This function will retrieve a valid link ID if the
+    /// `url` is already contained within the links map.
+    /// Otherwise, it will create a new Link with the
+    /// given `url` and add it to the map, returning the
+    /// new link ID.
+    fn force_get_link_id(&mut self, url: &str) -> Result<&mut Link> {
+        let this_link_id = if let Some(link_id) = self.link_ids.get(url) {
+            *link_id
+        } else {
+            let new_link = Link {
+                url: url.to_string(),
+                ..Default::default()
+            };
+            let new_link_id = new_link.id;
+
+            // add new link to the map, return its id
+            self.links
+                .insert(new_link_id, new_link)
+                .map_or(Ok(()), |_| Err(anyhow!("link already exists")))?;
+
+            new_link_id
+        };
+
+        self.links
+            .get_mut(&this_link_id)
+            .ok_or_else(|| anyhow!("failed to get link"))
     }
 
     // Get the ID for a link
 }
 
-impl Iterator for LinkGraph {
-    type Item = Link;
+impl<'a> IntoIterator for &'a LinkGraph {
+    type Item = (&'a LinkId, &'a Link);
+    type IntoIter = std::collections::hash_map::Iter<'a, LinkId, Link>;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        links.next()
+    fn into_iter(self) -> Self::IntoIter {
+        self.links.iter()
     }
-}
-
-trait LinkSerializer {
-    fn serialize(links: LinkGraph) -> Result<()>;
 }

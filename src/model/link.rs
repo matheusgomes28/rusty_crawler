@@ -25,6 +25,19 @@ pub struct Link {
     pub titles: Vec<String>,
 }
 
+impl Default for Link {
+    fn default() -> Link {
+        Link {
+            id: LINK_ID_COUNTER.fetch_add(1, Ordering::SeqCst),
+            url: String::from(""),
+            children: Default::default(),
+            parents: Default::default(),
+            images: Default::default(),
+            titles: Default::default(),
+        }
+    }
+}
+
 impl Link {
     pub fn new(
         url: String,

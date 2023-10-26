@@ -1,12 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
+use model::LinkGraph;
 use reqwest::Client;
-use std::{
-    collections::{HashMap, VecDeque},
-    process,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::VecDeque, process, sync::Arc, time::Duration};
 use tokio::{fs, sync::RwLock, task::JoinSet};
 use url::Url;
 
@@ -18,7 +14,6 @@ use crawler::{scrape_page, CrawlerStateRef, ScrapeOption};
 use crate::{
     crawler::CrawlerState,
     image_utils::{conver_links_to_images, download_images},
-    model::{Link, LinkId},
 };
 
 /// Simple program to greet a person
@@ -57,22 +52,22 @@ struct ProgramArgs {
 async fn output_status(crawler_state: CrawlerStateRef) -> Result<()> {
     'output: loop {
         let link_queue = crawler_state.link_queue.read().await;
-        let visited_links = crawler_state.visited_links.read().await;
+        let link_graph = crawler_state.link_graph.read().await;
         // let images = crawler_state.images.read().await;
 
-        if visited_links.len() > crawler_state.max_links {
+        if link_graph.len() > crawler_state.max_links {
             // Show the links
-            println!("All links found: {:#?}", visited_links);
+            println!("All links found: {:#?}", link_graph);
             // println!("All images found {:#?}", images);
             break 'output;
         }
 
-        println!("Number of links visited: {}", visited_links.len());
+        println!("Number of links visited: {}", link_graph.len());
         println!("Number of links in the queue: {}", link_queue.len());
         // println!("Number of images found: {}", images.len());
 
         drop(link_queue);
-        drop(visited_links);
+        drop(link_graph);
         // drop(images);
 
         tokio::time::sleep(Duration::from_secs(3)).await;
@@ -81,28 +76,17 @@ async fn output_status(crawler_state: CrawlerStateRef) -> Result<()> {
     Ok(())
 }
 
-// Given a list of links (urls), this will return a list
-// of all the found IDs. Links that have not been visited
-// will be filtered out
-fn find_link_ids(links: &[String], link_id_map: &HashMap<String, LinkId>) -> Vec<LinkId> {
-    links
-        .iter()
-        .filter_map(|l| link_id_map.get(l))
-        .cloned()
-        .collect()
-}
-
 async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
     // one client per worker thread
     let client = Client::new();
 
     // Crawler loop
     'crawler: loop {
-        let visited_links = crawler_state.visited_links.read().await;
-        if visited_links.len() > crawler_state.max_links {
+        let link_graph = crawler_state.link_graph.read().await;
+        if link_graph.len() > crawler_state.max_links {
             break 'crawler;
         }
-        drop(visited_links);
+        drop(link_graph);
 
         // also check that max links have been reached
         let mut link_queue = crawler_state.link_queue.write().await;
@@ -121,44 +105,48 @@ async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
         let scrape_options = vec![ScrapeOption::Images, ScrapeOption::Titles];
         let scrape_output = scrape_page(url, &client, &scrape_options).await;
 
-        // TODO : find children already visited
-        // TODO : find parents already visited
-
         // TODO : Analyse the performance when we have all these locks being
-        // dropped multiple times
-        let link_ids = crawler_state.link_ids.read().await;
-        let link = Link::new(
-            url_str.clone(),
-            find_link_ids(&scrape_output.links, &link_ids),
-            Default::default(), // Find a way to add parents here
-            scrape_output.images,
-            Default::default(),
-        );
-        drop(link_ids);
+        // dropped multiple times -- Until find a Benchmark measure
+        // let link_ids = crawler_state.link_ids.read().await;
+        // let link = Link::new(
+        //     url_str.clone(),
+        //     find_link_ids(&scrape_output.links, &link_ids),
+        //     Default::default(), // Find a way to add parents here
+        //     scrape_output.images,
+        //     Default::default(),
+        // );
+        // drop(link_ids); // Can I drop all of this code by calling `link_graph.update(...)?`
 
         let mut link_queue: tokio::sync::RwLockWriteGuard<'_, VecDeque<String>> =
             crawler_state.link_queue.write().await;
-        let mut visited_links = crawler_state.visited_links.write().await;
-        let mut link_ids = crawler_state.link_ids.write().await;
-        for link in scrape_output.links {
+
+        let mut link_graph = crawler_state.link_graph.write().await;
+        for link in scrape_output.links.iter() {
             // TODO : check if we already have this link in the map
             //        if not, add to queue
-            if link_ids.get(&link).is_none() {
-                link_queue.push_back(link)
+            if !link_graph.link_visited(link) {
+                // Check if the link already visited
+                link_queue.push_back(link.clone())
             }
         }
 
         // add visited link to set of already visited link
         // TODO : add the value (created link)
-        let link_id = link.id;
-        visited_links.insert(link_id, link);
-        link_ids.insert(url_str, link_id);
+        if let Err(e) = link_graph.update(
+            &url_str,
+            "",
+            &scrape_output.links,
+            &scrape_output.images,
+            &scrape_output.titles,
+        ) {
+            log::error!("could not update the link graph with {:#?}", e);
+        }
     }
 
     Ok(())
 }
 
-async fn serialize_links(links: &HashMap<LinkId, Link>, destination: &str) -> Result<()> {
+async fn serialize_links(links: &LinkGraph, destination: &str) -> Result<()> {
     let json = serde_json::to_string(links)?;
     fs::write(destination, json).await?;
     Ok(())
@@ -168,8 +156,7 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
     // call crawl(...)
     let crawler_state = CrawlerState {
         link_queue: RwLock::new(VecDeque::from([args.starting_url])),
-        link_ids: RwLock::new(Default::default()),
-        visited_links: RwLock::new(Default::default()),
+        link_graph: RwLock::new(Default::default()),
         max_links: args.max_links as usize,
     };
     let crawler_state = Arc::new(crawler_state);
@@ -197,12 +184,11 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
         }
     }
 
-    let visited_links = crawler_state.visited_links.read().await;
-    println!("{:?}", visited_links);
+    let link_graph = crawler_state.link_graph.read().await;
+    println!("{:?}", link_graph);
 
     let client = reqwest::Client::new();
-    let visited_links = crawler_state.visited_links.read().await;
-    let image_metadata = conver_links_to_images(&visited_links);
+    let image_metadata = conver_links_to_images(&link_graph);
     download_images(
         &image_metadata,
         &args.img_save_dir,
@@ -215,7 +201,7 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
     let image_database = serde_json::to_string(&image_metadata)?;
     fs::write(args.img_save_dir + "databse.json", image_database).await?;
 
-    serialize_links(&visited_links, &args.links_json).await?;
+    serialize_links(&link_graph, &args.links_json).await?;
 
     Ok(())
 }
