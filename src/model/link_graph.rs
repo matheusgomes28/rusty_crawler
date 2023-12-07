@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -20,7 +20,7 @@ impl LinkGraph {
         images: &[Image],
         titles: &[String],
     ) -> Result<()> {
-        let maybe_parent_id = self.link_ids.get(parent).cloned();
+        let maybe_parent = self.link_ids.get(parent).cloned();
 
         // for each child, add their id (if it exists) to this
         // links children
@@ -29,10 +29,9 @@ impl LinkGraph {
             .filter_map(|c| self.link_ids.get(c).cloned())
             .collect();
 
-        // get the existing link or create a new one
         let link = self.force_get_link_id(url)?;
 
-        if let Some(parent_id) = maybe_parent_id {
+        if let Some(parent_id) = maybe_parent {
             link.parents.push(parent_id);
         }
 
@@ -41,12 +40,24 @@ impl LinkGraph {
         // TODO : reduce all these cloned (maybe use moved values)
         link.images.extend(images.iter().cloned());
         link.titles.extend(titles.iter().cloned());
+        let this_link_id = link.id;
+
+        if let Some(parent_id) = maybe_parent {
+            // Make changes to the parent here
+            // Get the parent link
+            // Add this child to the parent link
+            let parent_link = self
+                .links
+                .get_mut(&parent_id)
+                .context("could not find parent link")?;
+
+            parent_link.children.push(this_link_id);
+        }
 
         // Potentially there's a chance that we might visit the same
         // link through different parents, meaning that we will get
         // duplicated children, images, titles -> need a way to
         // unduplicate all of this (I.e. use sets)
-
         Ok(())
     }
 
@@ -81,6 +92,7 @@ impl LinkGraph {
             new_link_id
         };
 
+        self.link_ids.insert(url.to_string(), this_link_id);
         self.links
             .get_mut(&this_link_id)
             .ok_or_else(|| anyhow!("failed to get link"))

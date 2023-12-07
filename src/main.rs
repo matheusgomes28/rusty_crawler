@@ -9,7 +9,7 @@ use url::Url;
 mod crawler;
 mod image_utils;
 mod model;
-use crawler::{scrape_page, CrawlerStateRef, ScrapeOption};
+use crawler::{scrape_page, CrawlerStateRef, LinkNode, ScrapeOption};
 
 use crate::{
     crawler::CrawlerState,
@@ -90,35 +90,22 @@ async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
 
         // also check that max links have been reached
         let mut link_queue = crawler_state.link_queue.write().await;
-        let url_str = link_queue.pop_back().unwrap_or("".to_string());
+        let LinkNode { parent, child } = link_queue.pop_back().unwrap_or(Default::default());
         drop(link_queue);
 
-        if url_str.is_empty() {
+        if child.is_empty() {
             tokio::time::sleep(Duration::from_millis(500)).await;
             continue;
         }
 
         // current url to visit
-        let url = Url::parse(&url_str)?;
+        let url = Url::parse(&child)?;
 
         // Log the errors
         let scrape_options = vec![ScrapeOption::Images, ScrapeOption::Titles];
         let scrape_output = scrape_page(url, &client, &scrape_options).await;
 
-        // TODO : Analyse the performance when we have all these locks being
-        // dropped multiple times -- Until find a Benchmark measure
-        // let link_ids = crawler_state.link_ids.read().await;
-        // let link = Link::new(
-        //     url_str.clone(),
-        //     find_link_ids(&scrape_output.links, &link_ids),
-        //     Default::default(), // Find a way to add parents here
-        //     scrape_output.images,
-        //     Default::default(),
-        // );
-        // drop(link_ids); // Can I drop all of this code by calling `link_graph.update(...)?`
-
-        let mut link_queue: tokio::sync::RwLockWriteGuard<'_, VecDeque<String>> =
-            crawler_state.link_queue.write().await;
+        let mut link_queue = crawler_state.link_queue.write().await;
 
         let mut link_graph = crawler_state.link_graph.write().await;
         for link in scrape_output.links.iter() {
@@ -126,15 +113,20 @@ async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
             //        if not, add to queue
             if !link_graph.link_visited(link) {
                 // Check if the link already visited
-                link_queue.push_back(link.clone())
+                link_queue.push_back(LinkNode {
+                    parent: child.clone(),
+                    child: link.clone(),
+                })
+            } else {
+                log::info!("Link already found: {}", &link);
             }
         }
 
         // add visited link to set of already visited link
         // TODO : add the value (created link)
         if let Err(e) = link_graph.update(
-            &url_str,
-            "",
+            &child,
+            &parent,
             &scrape_output.links,
             &scrape_output.images,
             &scrape_output.titles,
@@ -155,7 +147,10 @@ async fn serialize_links(links: &LinkGraph, destination: &str) -> Result<()> {
 async fn try_main(args: ProgramArgs) -> Result<()> {
     // call crawl(...)
     let crawler_state = CrawlerState {
-        link_queue: RwLock::new(VecDeque::from([args.starting_url])),
+        link_queue: RwLock::new(VecDeque::from([LinkNode {
+            child: args.starting_url,
+            ..Default::default()
+        }])),
         link_graph: RwLock::new(Default::default()),
         max_links: args.max_links as usize,
     };

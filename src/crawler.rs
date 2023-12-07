@@ -19,13 +19,14 @@ pub enum ScrapeOption {
     Titles, // TODO Add support for page titles
 }
 
-/*
-pub struct PageInfo {
-    links: Vec<String>,
-    images: Vec<Image>,
-    titles: Vec<Title>,
+/// TODO : Rename this to somthing better. This
+/// should hold the <parent link, link to visit>
+/// tuple
+#[derive(Default)]
+pub struct LinkNode {
+    pub parent: String,
+    pub child: String,
 }
-*/
 
 pub struct ScrapeOutput {
     pub links: Vec<String>,
@@ -34,7 +35,7 @@ pub struct ScrapeOutput {
 }
 
 pub struct CrawlerState {
-    pub link_queue: RwLock<VecDeque<String>>,
+    pub link_queue: RwLock<VecDeque<LinkNode>>,
     pub link_graph: RwLock<LinkGraph>,
     pub max_links: usize,
 }
