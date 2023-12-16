@@ -19,3 +19,11 @@ jobs:
     uses: ./.github/workflows/release.yml
     needs: tests
     if: ${{ (github.ref == 'refs/heads/main') && (github.event.pull_request.merged == true) }}
+  testing:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "github.ref"
+          echo "${{ github.ref }}"
+          echo "github.event.pull_request.merged"
+          echo "${{ github.event.pull_request.merged }}"
