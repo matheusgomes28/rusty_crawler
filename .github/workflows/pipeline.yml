@@ -15,3 +15,7 @@ jobs:
   tests:
     uses: ./.github/workflows/test.yml
     needs: build
+  release:
+    uses: ./.github/workflows/release.yml
+    needs: tests
+    if: github.ref == 'refs/heads/master' && github.event.pull_request.merged == true
