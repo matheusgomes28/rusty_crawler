@@ -9,7 +9,7 @@ use url::Url;
 mod crawler;
 mod image_utils;
 mod model;
-use crawler::{scrape_page, CrawlerStateRef, LinkNode, ScrapeOption};
+use crawler::{scrape_page, CrawlerStateRef, LinkPath, ScrapeOption};
 
 use crate::{
     crawler::CrawlerState,
@@ -53,22 +53,18 @@ async fn output_status(crawler_state: CrawlerStateRef) -> Result<()> {
     'output: loop {
         let link_queue = crawler_state.link_queue.read().await;
         let link_graph = crawler_state.link_graph.read().await;
-        // let images = crawler_state.images.read().await;
 
         if link_graph.len() > crawler_state.max_links {
             // Show the links
-            println!("All links found: {:#?}", link_graph);
-            // println!("All images found {:#?}", images);
+            log::info!("All links found: {:#?}", link_graph);
             break 'output;
         }
 
-        println!("Number of links visited: {}", link_graph.len());
-        println!("Number of links in the queue: {}", link_queue.len());
-        // println!("Number of images found: {}", images.len());
+        log::info!("Number of links in the queue: {}", link_queue.len());
+        log::info!("Number of links visited: {}", link_graph.len());
 
         drop(link_queue);
         drop(link_graph);
-        // drop(images);
 
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
@@ -82,38 +78,26 @@ async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
 
     // Crawler loop
     'crawler: loop {
-        let link_graph = crawler_state.link_graph.read().await;
-        if link_graph.len() > crawler_state.max_links {
+        let number_links_found = crawler_state.link_graph.read().await.len();
+        if number_links_found > crawler_state.max_links {
             break 'crawler;
         }
-        drop(link_graph);
 
         // also check that max links have been reached
         let mut link_queue = crawler_state.link_queue.write().await;
-        let LinkNode { parent, child } = link_queue.pop_back().unwrap_or(Default::default());
+        let LinkPath { parent, child } = link_queue.pop_back().unwrap_or(Default::default());
         drop(link_queue);
-
-        if child.is_empty() {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            continue;
-        }
-
-        // current url to visit
-        let url = Url::parse(&child)?;
 
         // Log the errors
         let scrape_options = vec![ScrapeOption::Images, ScrapeOption::Titles];
-        let scrape_output = scrape_page(url, &client, &scrape_options).await;
+        let scrape_output = scrape_page(Url::parse(&child)?, &client, &scrape_options).await;
 
         let mut link_queue = crawler_state.link_queue.write().await;
-
         let mut link_graph = crawler_state.link_graph.write().await;
         for link in scrape_output.links.iter() {
-            // TODO : check if we already have this link in the map
-            //        if not, add to queue
             if !link_graph.link_visited(link) {
                 // Check if the link already visited
-                link_queue.push_back(LinkNode {
+                link_queue.push_back(LinkPath {
                     parent: child.clone(),
                     child: link.clone(),
                 })
@@ -122,8 +106,6 @@ async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
             }
         }
 
-        // add visited link to set of already visited link
-        // TODO : add the value (created link)
         if let Err(e) = link_graph.update(
             &child,
             &parent,
@@ -144,21 +126,26 @@ async fn serialize_links(links: &LinkGraph, destination: &str) -> Result<()> {
     Ok(())
 }
 
-async fn try_main(args: ProgramArgs) -> Result<()> {
-    // call crawl(...)
+fn new_crawler_state(starting_url: String, max_links: u64) -> CrawlerStateRef {
     let crawler_state = CrawlerState {
-        link_queue: RwLock::new(VecDeque::from([LinkNode {
-            child: args.starting_url,
+        link_queue: RwLock::new(VecDeque::from([LinkPath {
+            child: starting_url,
             ..Default::default()
         }])),
         link_graph: RwLock::new(Default::default()),
-        max_links: args.max_links as usize,
+        max_links: max_links as usize,
     };
-    let crawler_state = Arc::new(crawler_state);
+
+    Arc::new(crawler_state)
+}
+
+async fn try_main(args: ProgramArgs) -> Result<()> {
+    let crawler_state = new_crawler_state(args.starting_url, args.max_links);
 
     // The actual crawling goes here
     let mut tasks = JoinSet::new();
 
+    // Add as many crawling workers as the user has specified
     for _ in 0..args.n_worker_threads {
         let crawler_state = crawler_state.clone();
         let task = tokio::spawn(async move { crawl(crawler_state.clone()).await });
@@ -180,10 +167,10 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
     }
 
     let link_graph = crawler_state.link_graph.read().await;
-    println!("{:?}", link_graph);
 
     let client = reqwest::Client::new();
     let image_metadata = conver_links_to_images(&link_graph);
+
     download_images(
         &image_metadata,
         &args.img_save_dir,
@@ -194,7 +181,7 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
 
     // Save this to image dir
     let image_database = serde_json::to_string(&image_metadata)?;
-    fs::write(args.img_save_dir + "databse.json", image_database).await?;
+    fs::write(args.img_save_dir + "database.json", image_database).await?;
 
     serialize_links(&link_graph, &args.links_json).await?;
 

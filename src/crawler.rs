@@ -23,7 +23,7 @@ pub enum ScrapeOption {
 /// should hold the <parent link, link to visit>
 /// tuple
 #[derive(Default)]
-pub struct LinkNode {
+pub struct LinkPath {
     pub parent: String,
     pub child: String,
 }
@@ -35,7 +35,7 @@ pub struct ScrapeOutput {
 }
 
 pub struct CrawlerState {
-    pub link_queue: RwLock<VecDeque<LinkNode>>,
+    pub link_queue: RwLock<VecDeque<LinkPath>>,
     pub link_graph: RwLock<LinkGraph>,
     pub max_links: usize,
 }
