@@ -22,6 +22,7 @@ use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
+use log2::*;
 use reqwest::{Client, Response};
 use tokio::fs::{create_dir, File};
 use tokio::io::AsyncWriteExt;
@@ -32,7 +33,7 @@ use crate::model::{Image, LinkGraph};
 
 /// Convert all the images in the found scraped
 /// links to the (Uuid name, image) format
-pub fn conver_links_to_images(links: &LinkGraph) -> HashMap<String, Image> {
+pub fn convert_links_to_images(links: &LinkGraph) -> HashMap<String, Image> {
     links
         .into_iter()
         .flat_map(|(_, link)| link.images.clone())
@@ -87,7 +88,6 @@ fn get_extension(res: &Response) -> Result<&str> {
 pub async fn download_images(
     images: &HashMap<String, Image>,
     save_directory: &str,
-    client: &Client,
     max_links: u64,
 ) -> Result<()> {
     let directory_path = Path::new(&save_directory);
@@ -96,6 +96,7 @@ pub async fn download_images(
         create_dir(directory_path).await?;
     }
 
+    let client = reqwest::Client::new();
     for (name, image) in images.iter().take(max_links as usize) {
         // directory + name + extension
         let destination_path = directory_path.join(name);
@@ -103,8 +104,8 @@ pub async fn download_images(
             .to_str()
             .ok_or_else(|| anyhow!("could not get destination path"))?;
 
-        if let Err(e) = download_image(&image.link, destination, client).await {
-            log::error!("Could not download image {}, error: {}", image.link, e);
+        if let Err(e) = download_image(&image.link, destination, &client).await {
+            error!("Could not download image {}, error: {}", image.link, e);
         }
     }
 

@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Result};
+use log2::*;
 use reqwest::{Client, StatusCode};
 use scraper::{Html, Selector};
 use std::{collections::VecDeque, sync::Arc, time::Duration};
@@ -85,7 +86,7 @@ fn get_images(html_dom: &Html, root_url: &Url) -> Vec<Image> {
             continue;
         }
 
-        log::error!("failed to join url"); // TODO : better image
+        error!("failed to join url"); // TODO : better image
     }
 
     result
@@ -169,7 +170,7 @@ pub async fn scrape_page(url: Url, client: &Client, options: &[ScrapeOption]) ->
     let mut scrape_output = match scrape_page_helper(url.clone(), client, options).await {
         Ok(output) => output,
         Err(e) => {
-            log::error!("Could not find links: {}", e);
+            error!("Could not find links: {}", e);
             ScrapeOutput {
                 images: Default::default(),
                 links: Default::default(),

@@ -1,5 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
+use log2::*;
+use logger::spinner::Colour;
 use model::LinkGraph;
 use reqwest::Client;
 use std::{collections::VecDeque, process, sync::Arc, time::Duration};
@@ -8,12 +10,13 @@ use url::Url;
 
 mod crawler;
 mod image_utils;
+mod logger;
 mod model;
 use crawler::{scrape_page, CrawlerStateRef, LinkPath, ScrapeOption};
 
 use crate::{
     crawler::CrawlerState,
-    image_utils::{conver_links_to_images, download_images},
+    image_utils::{convert_links_to_images, download_images},
 };
 
 /// Simple program to greet a person
@@ -49,24 +52,25 @@ struct ProgramArgs {
     links_json: String,
 }
 
-async fn output_status(crawler_state: CrawlerStateRef) -> Result<()> {
+async fn output_status(crawler_state: CrawlerStateRef, total_links: u64) -> Result<()> {
+    let progress_bar = logger::progress_bar::ProgressBar::new(total_links);
+    progress_bar.message("Finding links");
     'output: loop {
         let link_queue = crawler_state.link_queue.read().await;
         let link_graph = crawler_state.link_graph.read().await;
 
         if link_graph.len() > crawler_state.max_links {
             // Show the links
-            log::info!("All links found: {:#?}", link_graph);
+            info!("All links found: {:#?}", link_graph);
             break 'output;
         }
 
-        log::info!("Number of links in the queue: {}", link_queue.len());
-        log::info!("Number of links visited: {}", link_graph.len());
+        progress_bar.set_step(link_graph.len() as u64);
 
         drop(link_queue);
         drop(link_graph);
 
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     Ok(())
@@ -102,7 +106,7 @@ async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
                     child: link.clone(),
                 })
             } else {
-                log::info!("Link already found: {}", &link);
+                info!("Link already found: {}", &link);
             }
         }
 
@@ -113,7 +117,7 @@ async fn crawl(crawler_state: CrawlerStateRef) -> Result<()> {
             &scrape_output.images,
             &scrape_output.titles,
         ) {
-            log::error!("could not update the link graph with {:#?}", e);
+            error!("could not update the link graph with {:#?}", e);
         }
     }
 
@@ -156,49 +160,105 @@ async fn try_main(args: ProgramArgs) -> Result<()> {
     if args.log_status {
         let crawler_state = crawler_state.clone();
         tasks.spawn(tokio::spawn(async move {
-            output_status(crawler_state.clone()).await
+            output_status(crawler_state.clone(), args.max_links).await
         }));
     }
 
     while let Some(result) = tasks.join_next().await {
         if let Err(e) = result {
-            log::error!("Error: {:?}", e);
+            error!("Error: {:?}", e);
         }
     }
+    // FINISHED CRAWLING
 
     let link_graph = crawler_state.link_graph.read().await;
 
-    let client = reqwest::Client::new();
-    let image_metadata = conver_links_to_images(&link_graph);
+    let spinner = logger::spinner::Spinner::new();
+    spinner.status("[1/4] converting image links");
+    let image_metadata = convert_links_to_images(&link_graph);
+    spinner.print_above("  [1/4] converted image links", Colour::Green);
 
-    download_images(
-        &image_metadata,
-        &args.img_save_dir,
-        &client,
-        args.max_images,
-    )
-    .await?;
+    spinner.status("[2/4] downloading image metadata");
+    download_images(&image_metadata, &args.img_save_dir, args.max_images).await?;
+    spinner.print_above("  [2/4] downloaded image metadata", Colour::Green);
 
     // Save this to image dir
+    spinner.status("[3/4] creating image database");
     let image_database = serde_json::to_string(&image_metadata)?;
     fs::write(args.img_save_dir + "database.json", image_database).await?;
+    spinner.print_above("  [3/4] created image database", Colour::Green);
 
+    spinner.status(format!("[4/4] serializing links to {}", args.links_json));
     serialize_links(&link_graph, &args.links_json).await?;
+    spinner.print_above(
+        format!("  [4/4] serializing links to {}", args.links_json),
+        Colour::Green,
+    );
 
     Ok(())
 }
 
+fn pretty_print_args(args: &ProgramArgs) {
+    println!(
+        "{}",
+        console::style("CRAWLER INPUT ARGUMENTS").white().on_black()
+    );
+    println!(
+        "{}  Starting URL: {}",
+        console::Emoji("🌐", ""),
+        console::style(&args.starting_url).bold().cyan()
+    );
+    println!(
+        "{}  Maximum visited links: {}",
+        console::Emoji("🔗", ""),
+        console::style(&args.max_links).bold().cyan()
+    );
+    println!(
+        "{}  Maximum number of images: {}",
+        console::Emoji("🖼️", ""),
+        console::style(&args.max_images).bold().cyan()
+    );
+    println!(
+        "{}  Number of workers: {}",
+        console::Emoji("⚒️", ""),
+        console::style(&args.n_worker_threads).bold().cyan()
+    );
+    println!(
+        "{}  Should log progress? {}",
+        console::Emoji("❔", ""),
+        console::style(args.log_status).bold().cyan()
+    );
+    println!(
+        "{}  Image directory: {}",
+        console::Emoji("📁", ""),
+        console::style(&args.img_save_dir).bold().cyan()
+    );
+    println!(
+        "{}  Output json path: {}",
+        console::Emoji("📁", ""),
+        console::style(&args.links_json).bold().cyan()
+    );
+    println!()
+}
+
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    let _log2 = log2::open("log.txt");
+
+    // Print the arguments passed in nicely
     let args = ProgramArgs::parse();
+    pretty_print_args(&args);
 
     match try_main(args).await {
         Ok(_) => {
-            log::info!("Finished");
+            println!(
+                "{} {}",
+                console::Emoji("✅", ""),
+                console::style("Finished!").green()
+            );
         }
         Err(e) => {
-            log::error!("Error: {:?}", e);
+            error!("Error: {:?}", e);
             process::exit(-1);
         }
     }
